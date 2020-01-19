@@ -1,0 +1,77 @@
+from google.cloud import storage
+from scrapy.crawler import CrawlerProcess
+from datetime import datetime
+import scrapy
+import json
+import tempfile
+TEMPORARY_FILE = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+def upload_file_to_bucket(bucket_name, blob_file, destination_file_name):
+    """Uploads a file to the bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.get_bucket(bucket_name)
+    blob = bucket.blob(destination_file_name)
+    blob.upload_from_filename(blob_file.name, content_type='text/csv')
+class BlogSpider(scrapy.Spider):
+    name = 'blogspider'
+    # Podeis cambiar la url inicial por otra u otras paginas
+    start_urls = ['https://www.esmadrid.com/agenda-exposiciones-madrid']
+    
+    # con esto limito no hacer mas de 10 ejecuciones 
+    COUNT_MAX = 10
+    count = 0
+
+    def parse(self, response):
+        # Aqui scrapeamos los datos y los imprimimos a un fichero
+        for evento in response.css('div.node-event'):
+            if response.request.url != 'https://www.esmadrid.com/agenda-exposiciones-madrid':
+                name_evento = evento.css('div.group-header h1.field-name-title-field ::text').extract_first()
+                page_evento = response.request.url
+        
+                fechas_evento = evento.css('fieldset.group-interest-data-table div.group-wrapper-block1 ::text').extract()
+                datos_evento = evento.css('fieldset.group-interest-data-table div.group-wrapper-block2 ::text').extract()
+
+                dias_evento = ''
+                if len(fechas_evento) > 1:
+                    dias_evento = fechas_evento[1]
+
+                lugar_evento = ''
+                if len(fechas_evento) > 3:
+                    lugar_evento = fechas_evento[3]
+                
+                direccion_evento = ''
+                if len(datos_evento) > 5:
+                    #direccion_evento = datos_evento[1] + " " + datos_evento[2] + " " +datos_evento[3] + " " +datos_evento[4] + " " + datos_evento[5]
+                    direccion_evento = datos_evento[1] + " " + datos_evento[2] + " " +datos_evento[3]
+                
+                telefono_evento = ''
+                if len(datos_evento) > 7:
+                    telefono_evento = datos_evento[7]
+                
+                web_evento = ''
+                if len(datos_evento) > 9:
+                    web_evento = datos_evento[9] 
+
+                
+                # Print a un fichero
+                #print(f"{name_evento};{page_evento};{dias_evento};{lugar_evento};{direccion_evento};{telefono_evento};{web_evento}\n", file=filep)
+                print(f"{name_evento};{page_evento};{dias_evento};{direccion_evento}\n", file=filep)
+
+        # Aqui hacemos crawling (con el follow)
+        for next_page in response.css('div.node-cover div.field-group-link a'):
+            self.count = self.count + 1
+            if (self.count < self.COUNT_MAX):
+                yield response.follow(next_page, self.parse)
+def activate(request):
+    now = datetime.now() 
+    request_json = request.get_json()
+    BUCKET_NAME = 'bigdatafiles-practica'
+    DESTINATION_FILE_NAME = 'datasets/' + now.strftime("%Y/%m/%d/%H/%M") +'crawl.csv'
+    process = CrawlerProcess({
+        'USER_AGENT': 'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
+    })
+    process.crawl(BlogSpider)
+    process.start()
+    TEMPORARY_FILE.seek(0)
+    upload_file_to_bucket(BUCKET_NAME, TEMPORARY_FILE, DESTINATION_FILE_NAME)
+    TEMPORARY_FILE.close()
+    return "Success!"
